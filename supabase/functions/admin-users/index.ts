@@ -51,13 +51,14 @@ Deno.serve(async (req: Request) => {
     if (action === "list") {
       const { data: list, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
       if (error) throw error;
-      const { data: profiles } = await admin.from("profiles").select("id,name,role");
+      const { data: profiles } = await admin.from("profiles").select("id,name,role,unit_id");
       const byId = new Map((profiles ?? []).map((p: any) => [p.id, p]));
       let users = list.users.map((u: any) => ({
         id: u.id,
         email: u.email,
         name: byId.get(u.id)?.name ?? u.email,
         role: byId.get(u.id)?.role ?? "nutzer",
+        unit_id: byId.get(u.id)?.unit_id ?? null,
         last_sign_in_at: u.last_sign_in_at,
         banned: !!u.banned_until && new Date(u.banned_until) > new Date(),
       }));
@@ -70,6 +71,11 @@ Deno.serve(async (req: Request) => {
       const username = String(body.username ?? "").trim();
       const password = String(body.password ?? "");
       const role = isAdmin && ROLES.includes(body.role) ? body.role : "nutzer";
+      const unitId = body.unit_id ? String(body.unit_id) : null;
+      if (unitId) {
+        const { data: un } = await admin.from("units").select("id").eq("id", unitId).maybeSingle();
+        if (!un) return json({ error: "Unbekannte Einheit." }, 400);
+      }
       if (!/^[^\s@.]+\.[^\s@.]+$/.test(username)) return json({ error: "Benutzername muss das Format Vorname.Nachname haben." }, 400);
       if (password.length < 8) return json({ error: "Das Passwort muss mindestens 8 Zeichen haben." }, 400);
       const { data, error } = await admin.auth.admin.createUser({
@@ -79,9 +85,22 @@ Deno.serve(async (req: Request) => {
         user_metadata: { name: username },
       });
       if (error) throw error;
-      const { error: pErr } = await admin.from("profiles").update({ name: username, role }).eq("id", data.user.id);
+      const { error: pErr } = await admin.from("profiles").update({ name: username, role, unit_id: unitId }).eq("id", data.user.id);
       if (pErr) throw pErr;
       return json({ ok: true, id: data.user.id });
+    }
+
+    if (action === "set_unit") {
+      const denied = await checkTarget(String(body.id));
+      if (denied) return denied;
+      const unitId = body.unit_id ? String(body.unit_id) : null;
+      if (unitId) {
+        const { data: un } = await admin.from("units").select("id").eq("id", unitId).maybeSingle();
+        if (!un) return json({ error: "Unbekannte Einheit." }, 400);
+      }
+      const { error } = await admin.from("profiles").update({ unit_id: unitId }).eq("id", String(body.id));
+      if (error) throw error;
+      return json({ ok: true });
     }
 
     if (action === "set_password") {
